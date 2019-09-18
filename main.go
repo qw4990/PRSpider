@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/go-github/v28/github"
@@ -19,10 +21,8 @@ func getAllVecExprPRs(begin, end time.Time) []*github.PullRequest {
 	tc := oauth2.NewClient(ctx, ts)
 	client := github.NewClient(tc)
 	opt := &github.PullRequestListOptions{
-		State:     "closed",
-		Head:      "implement vectorized evaluation for",
-		Sort:      "created",
-		Direction: "desc",
+		State: "closed",
+		Head:  "implement+vectorized+evaluation+for",
 	}
 	opt.PerPage = 300
 	_, resp, err := client.PullRequests.List(context.Background(), "pingcap", "tidb", opt)
@@ -32,33 +32,47 @@ func getAllVecExprPRs(begin, end time.Time) []*github.PullRequest {
 
 	prNames := make(map[string]struct{})
 	results := make([]*github.PullRequest, 0, 128)
-	for i := 0; i <= resp.LastPage; i++ {
-		fmt.Println("Total Page:", resp.LastPage, ", Page Now:", i)
-		opt.ListOptions.Page = i
-		prs, _, err := client.PullRequests.List(context.Background(), "pingcap", "tidb", opt)
-		if err != nil {
-			panic(err)
-		}
-		for _, pr := range prs {
-			if !strings.Contains(*pr.Title, "implement vectorized evaluation") {
-				continue
-			}
+	var lock sync.Mutex
+	var wg sync.WaitGroup
+	con := 5
+	for i := 0; i < con; i++ {
+		wg.Add(1)
+		go func(id int, opt github.PullRequestListOptions) {
+			defer wg.Done()
+			for i := id; i < resp.LastPage; i += con {
+				fmt.Println("Total Page:", resp.LastPage, ", Page Now:", i)
+				opt.ListOptions.Page = i
+				prs, _, err := client.PullRequests.List(context.Background(), "pingcap", "tidb", &opt)
+				if err != nil {
+					panic(err)
+				}
 
-			closedAt := *pr.ClosedAt
-			if closedAt.Before(begin) || closedAt.After(end) {
-				continue
-			}
+				for _, pr := range prs {
+					if !strings.Contains(*pr.Title, "implement vectorized evaluation") {
+						continue
+					}
 
-			if _, ok := prNames[*pr.Title]; ok {
-				continue
-			}
+					closedAt := *pr.ClosedAt
+					if closedAt.Before(begin) || closedAt.After(end) {
+						continue
+					}
 
-			results = append(results, pr)
-			prNames[*pr.Title] = struct{}{}
-		}
-		time.Sleep(time.Second * 1) // avoid rate limit
+					lock.Lock()
+					if _, ok := prNames[*pr.Title]; ok {
+						lock.Unlock()
+						continue
+					}
+
+					results = append(results, pr)
+					prNames[*pr.Title] = struct{}{}
+					lock.Unlock()
+				}
+				time.Sleep(time.Duration(rand.Intn(20)+1) * time.Second) // avoid rate limit
+			}
+		}(i, *opt)
 	}
 
+	wg.Wait()
 	return results
 }
 
