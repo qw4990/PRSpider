@@ -30,6 +30,8 @@ func getAllVecExprPRs(begin, end time.Time) []*github.PullRequest {
 		panic(err)
 	}
 
+	resp.LastPage = 1
+
 	prNames := make(map[string]struct{})
 	results := make([]*github.PullRequest, 0, 128)
 	var lock sync.Mutex
@@ -126,7 +128,8 @@ func main() {
 		fmt.Println(it.User, it.Cnt)
 		prs := countMap[it.User]
 		for _, pr := range prs {
-			fmt.Println(builtinFuncName(*pr.Title), *pr.URL)
+			url := *pr.Links.HTML.HRef
+			fmt.Print(builtinFuncName(*pr.Title), "\t", url[len("https://"):], "\n")
 		}
 	}
 }
